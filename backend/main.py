@@ -3,15 +3,24 @@ Website Monitor Backend – FINAL SQLITE STABLE
 FastAPI + Scheduler + Telegram Alerts + Logs + Screenshot + PDF
 """
 
+import os
+import time
+import threading
+import requests
+
 from fastapi import FastAPI, HTTPException
-import time, requests, threading
 
 from database import SessionLocal, engine
 from models import Website, WebsiteLog
 from schemas import WebsiteCreate, WebsiteResponse, WebsiteLogResponse
 
-from telegram_service import send_telegram, send_telegram_photo
 from browser_service import scan_website
+
+from telegram_service import (
+    send_telegram,
+    send_telegram_photo,
+    send_telegram_document
+)
 
 
 app = FastAPI(title="Website Monitor Backend")
@@ -67,7 +76,7 @@ def shutdown():
     print("🛑 Scheduler stopped")
 
 # =========================
-# WEBSITE CHECK (KEYWORD + SCREENSHOT + PDF)
+# WEBSITE CHECK (KEYWORD + SCREENSHOT + PDF DOWNLOAD + ATTACH)
 # =========================
 def check_website(db, site: Website):
     if not site.enabled or not MONITORING_ENABLED:
@@ -85,28 +94,62 @@ def check_website(db, site: Website):
         if scan["found"] and not site.alert_sent:
 
             message = (
-                f"🚨 NEW SARKARI UPDATE FOUND!\n\n"
-                f"🏢 Site: {site.name}\n"
-                f"🔑 Keyword: {site.keyword}\n"
-                f"🌐 URL: {site.url}\n\n"
+                f"🚨 *NEW SARKARI UPDATE FOUND!*\n\n"
+                f"🏢 *Site:* {site.name}\n"
+                f"🔑 *Keyword:* {site.keyword}\n"
+                f"🌐 *Page:* {scan.get('final_url') or site.url}\n"
             )
 
-            # 📄 PDF LINKS
+            # 🧠 CONTEXT (where keyword found)
+            if scan.get("context"):
+                message += f"\n🧾 *Context:*\n{scan['context']}\n"
+
+            # 📄 PDF LINKS (text info)
             if scan["pdf_links"]:
-                message += "📄 PDF Links:\n"
+                message += "\n📄 *PDF Links:*\n"
                 message += "\n".join(scan["pdf_links"][:3])
 
-            # 📸 Send screenshot with caption
-            send_telegram_photo(
-                scan["screenshot"],
-                message
-            )
+            # 📸 Screenshot (Telegram-safe)
+            if scan.get("screenshot"):
+                send_telegram_photo(
+                    scan["screenshot"],
+                    message
+                )
+            else:
+                send_telegram(message)
 
+            # =========================
+            # 📥 PDF DOWNLOAD + ATTACH
+            # =========================
+            if scan["pdf_links"]:
+                os.makedirs("downloads", exist_ok=True)
+
+                for pdf_url in scan["pdf_links"][:2]:  # max 2 PDFs (safe)
+                    try:
+                        filename = pdf_url.split("/")[-1]
+                        local_path = os.path.join("downloads", filename)
+
+                        # Download PDF
+                        r = requests.get(pdf_url, timeout=30)
+                        if r.status_code == 200:
+                            with open(local_path, "wb") as f:
+                                f.write(r.content)
+
+                            # Send PDF to Telegram
+                            send_telegram_document(
+                                local_path,
+                                caption=f"📎 {filename}\n{site.name}"
+                            )
+
+                    except Exception as pdf_err:
+                        print("❌ PDF download/send error:", pdf_err)
+
+            # 📝 LOG
             save_log(
                 db,
                 site.id,
                 "keyword",
-                f"Keyword '{site.keyword}' found"
+                f"Keyword '{site.keyword}' found with screenshot & PDF"
             )
 
             site.keyword_found = True
@@ -123,29 +166,28 @@ def check_website(db, site: Website):
     except Exception as e:
         site.last_checked = int(time.time())
 
-        # ✅ FIX: readable error always
-        error_text = repr(e) if str(e).strip() == "" else str(e)
+        error_text = repr(e) if not str(e).strip() else str(e)
         print("❌ WEBSITE SCAN ERROR:", error_text)
 
-        # ✅ FIX: ignore first-run Playwright glitches
+        # ⚠️ Ignore first run glitches
         if site.first_run:
-            print("⚠️ Ignored error on first run")
             site.first_run = False
             db.commit()
             return
 
-        # ✅ FIX: prevent repeat spam
+        # 🚫 Prevent repeat spam
         if site.last_status != "error":
             save_log(db, site.id, "error", error_text)
 
             send_telegram(
-                f"🚨 Website Error!\n\n"
+                f"🚨 *Website Error!*\n\n"
                 f"Site: {site.name}\n"
                 f"Error: {error_text}"
             )
 
         site.last_status = "error"
         db.commit()
+
 
 
 # =========================

@@ -39,52 +39,62 @@ def scan_website(url: str, keyword: str):
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-gpu",
-                "--no-sandbox"
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
             ]
         )
 
         page = browser.new_page()
 
-        # ✅ TELEGRAM SAFE VIEWPORT
+        # ✅ Telegram-safe viewport
         page.set_viewport_size({"width": 1280, "height": 720})
 
-        # ⏱️ SHORT TIMEOUT (gov sites safe)
+        # ⏱️ Govt sites ke liye safe timeout
         page.set_default_timeout(30000)
 
-        # ✅ IMPORTANT FIX
-        page.goto(url, wait_until="domcontentloaded")
-        time.sleep(3)  # small buffer for JS
+        try:
+            # ⚠️ IMPORTANT: domcontentloaded is fastest + safest
+            page.goto(url, wait_until="domcontentloaded")
+            time.sleep(3)  # JS buffer
 
-        # 🔁 Final URL after redirect
-        result["final_url"] = page.url
+            # 🔁 Final URL after redirect
+            result["final_url"] = page.url
 
-        # 🔑 KEYWORD + CONTEXT
-        body_text = page.inner_text("body")
-        for line in body_text.splitlines():
-            if keyword.lower() in line.lower():
-                result["found"] = True
-                result["context"] = line.strip()[:300]
-                break
+            # 🔑 KEYWORD + CONTEXT
+            body_text = page.inner_text("body")
+            for line in body_text.splitlines():
+                if keyword.lower() in line.lower():
+                    result["found"] = True
+                    result["context"] = line.strip()[:300]
+                    break
 
-        # 📄 PDF LINKS
-        seen = set()
-        for link in page.query_selector_all("a"):
-            href = link.get_attribute("href")
-            if not href:
-                continue
+            # 📄 PDF LINKS (clean + unique)
+            seen = set()
+            for link in page.query_selector_all("a"):
+                href = link.get_attribute("href")
+                if not href:
+                    continue
 
-            full_url = urljoin(result["final_url"], href)
-            if full_url.lower().endswith(".pdf") and full_url not in seen:
-                seen.add(full_url)
-                result["pdf_links"].append(full_url)
+                full_url = urljoin(result["final_url"], href)
 
-        # 📸 TELEGRAM SAFE SCREENSHOT (NOT full page)
-        domain = urlparse(result["final_url"]).netloc.replace(".", "_")
-        filename = f"{SCREENSHOT_DIR}/{domain}_{int(time.time())}.png"
+                if (
+                    full_url.lower().endswith(".pdf")
+                    and full_url not in seen
+                ):
+                    seen.add(full_url)
+                    result["pdf_links"].append(full_url)
 
-        page.screenshot(path=filename)
-        result["screenshot"] = filename
+            # 📸 Telegram-safe screenshot (NOT full page)
+            domain = urlparse(result["final_url"]).netloc.replace(".", "_")
+            filename = f"{SCREENSHOT_DIR}/{domain}_{int(time.time())}.png"
 
-        browser.close()
+            page.screenshot(path=filename)
+            result["screenshot"] = filename
+
+        except Exception as e:
+            print("❌ WEBSITE SCAN ERROR:", e)
+
+        finally:
+            browser.close()
 
     return result

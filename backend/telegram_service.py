@@ -23,7 +23,7 @@ def send_telegram(message: str):
             data={
                 "chat_id": CHAT_ID,
                 "text": message,
-                "parse_mode": "Markdown"   # ✅ optional but useful
+                "parse_mode": "Markdown"
             },
             timeout=15
         )
@@ -42,13 +42,17 @@ def send_telegram(message: str):
 # =========================
 def send_telegram_photo(photo_path: str, caption: str):
     try:
+        if not os.path.exists(photo_path):
+            print("❌ Screenshot not found:", photo_path)
+            return
+
         with open(photo_path, "rb") as photo:
             response = requests.post(
                 f"{BASE_URL}/sendPhoto",
                 data={
                     "chat_id": CHAT_ID,
                     "caption": caption[:1024],
-                    "parse_mode": "Markdown"   # ✅ optional
+                    "parse_mode": "Markdown"
                 },
                 files={
                     "photo": photo
@@ -63,3 +67,38 @@ def send_telegram_photo(photo_path: str, caption: str):
 
     except Exception as e:
         print("❌ Telegram photo failed:", e)
+
+
+# =========================
+# SEND PDF / DOCUMENT (NEW)
+# =========================
+def send_telegram_document(file_path: str, caption: str = ""):
+    """
+    PDF / Document attach karke Telegram par bhejta hai
+    """
+    try:
+        if not os.path.exists(file_path):
+            print("❌ PDF not found:", file_path)
+            return
+
+        with open(file_path, "rb") as doc:
+            response = requests.post(
+                f"{BASE_URL}/sendDocument",
+                data={
+                    "chat_id": CHAT_ID,
+                    "caption": caption[:1024],
+                    "parse_mode": "Markdown"
+                },
+                files={
+                    "document": doc
+                },
+                timeout=60
+            )
+
+        if response.status_code != 200:
+            print("❌ Telegram document error:", response.text)
+        else:
+            print("📎 Telegram PDF sent")
+
+    except Exception as e:
+        print("❌ Telegram document failed:", e)
