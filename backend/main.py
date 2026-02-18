@@ -80,6 +80,7 @@ def shutdown():
 # WEBSITE CHECK (KEYWORD + SCREENSHOT + PDF DOWNLOAD + ATTACH)
 # =========================
 def check_website(db, site: Website):
+    print(f"🔍 Scanning: {site.name} | {site.url} | keyword={site.keyword}")
     if not site.enabled or not MONITORING_ENABLED:
         return
 

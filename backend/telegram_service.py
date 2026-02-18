@@ -25,7 +25,7 @@ def send_telegram(message: str):
                 "text": message,
                 "parse_mode": "Markdown"
             },
-            timeout=15
+            timeout=60
         )
 
         if response.status_code != 200:
@@ -57,7 +57,7 @@ def send_telegram_photo(photo_path: str, caption: str):
                 files={
                     "photo": photo
                 },
-                timeout=30
+                timeout=60
             )
 
         if response.status_code != 200:
@@ -92,7 +92,7 @@ def send_telegram_document(file_path: str, caption: str = ""):
                 files={
                     "document": doc
                 },
-                timeout=60
+                timeout=300
             )
 
         if response.status_code != 200:
