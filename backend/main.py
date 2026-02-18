@@ -75,6 +75,7 @@ def shutdown():
     RUN_SCHEDULER = False
     print("🛑 Scheduler stopped")
 
+
 # =========================
 # WEBSITE CHECK (KEYWORD + SCREENSHOT + PDF DOWNLOAD + ATTACH)
 # =========================
@@ -85,13 +86,24 @@ def check_website(db, site: Website):
     try:
         site.last_checked = int(time.time())
 
-        # 🔍 Playwright deep scan
-        scan = scan_website(site.url, site.keyword)
+        # 🔍 FAST SCAN (NO screenshot)
+        scan = scan_website(
+            site.url,
+            site.keyword,
+            take_screenshot=False
+        )
 
         site.last_status = "up"
 
-        # 🚨 FIRST TIME KEYWORD FOUND
-        if scan["found"] and not site.alert_sent:
+        # 🚨 KEYWORD FOUND FOR FIRST TIME
+        if scan.get("found") and not site.alert_sent:
+
+            # 🔍 SECOND SCAN (WITH screenshot)
+            scan = scan_website(
+                site.url,
+                site.keyword,
+                take_screenshot=True
+            )
 
             message = (
                 f"🚨 *NEW SARKARI UPDATE FOUND!*\n\n"
@@ -100,42 +112,42 @@ def check_website(db, site: Website):
                 f"🌐 *Page:* {scan.get('final_url') or site.url}\n"
             )
 
-            # 🧠 CONTEXT (where keyword found)
+            # 🧠 Context
             if scan.get("context"):
                 message += f"\n🧾 *Context:*\n{scan['context']}\n"
 
-            # 📄 PDF LINKS (text info)
-            if scan["pdf_links"]:
+            # 📄 PDF links (text)
+            if scan.get("pdf_links"):
                 message += "\n📄 *PDF Links:*\n"
                 message += "\n".join(scan["pdf_links"][:3])
 
-            # 📸 Screenshot (Telegram-safe)
+            # 📸 Screenshot (ONLY ONCE)
             if scan.get("screenshot"):
-                send_telegram_photo(
-                    scan["screenshot"],
-                    message
-                )
+                send_telegram_photo(scan["screenshot"], message)
             else:
                 send_telegram(message)
 
             # =========================
-            # 📥 PDF DOWNLOAD + ATTACH
+            # 📥 PDF DOWNLOAD + ATTACH (ONLY ONCE)
             # =========================
-            if scan["pdf_links"]:
+            if scan.get("pdf_links"):
                 os.makedirs("downloads", exist_ok=True)
 
-                for pdf_url in scan["pdf_links"][:2]:  # max 2 PDFs (safe)
+                for pdf_url in scan["pdf_links"][:2]:
                     try:
                         filename = pdf_url.split("/")[-1]
                         local_path = os.path.join("downloads", filename)
 
-                        # Download PDF
+                        # ⛔ Already downloaded → skip
+                        if os.path.exists(local_path):
+                            continue
+
                         r = requests.get(pdf_url, timeout=30)
                         if r.status_code == 200:
                             with open(local_path, "wb") as f:
                                 f.write(r.content)
 
-                            # Send PDF to Telegram
+
                             send_telegram_document(
                                 local_path,
                                 caption=f"📎 {filename}\n{site.name}"
@@ -155,8 +167,8 @@ def check_website(db, site: Website):
             site.keyword_found = True
             site.alert_sent = True
 
-        # 🔄 KEYWORD REMOVED → RESET ALERT
-        if not scan["found"]:
+        # 🔄 Keyword removed → reset for next detection
+        if not scan.get("found"):
             site.keyword_found = False
             site.alert_sent = False
 
@@ -165,6 +177,7 @@ def check_website(db, site: Website):
 
     except Exception as e:
         site.last_checked = int(time.time())
+        site.last_status = "error"
 
         error_text = repr(e) if not str(e).strip() else str(e)
         print("❌ WEBSITE SCAN ERROR:", error_text)
@@ -175,17 +188,16 @@ def check_website(db, site: Website):
             db.commit()
             return
 
-        # 🚫 Prevent repeat spam
-        if site.last_status != "error":
-            save_log(db, site.id, "error", error_text)
+        # 🚫 Prevent repeat error spam
+        save_log(db, site.id, "error", error_text)
 
-            send_telegram(
-                f"🚨 *Website Error!*\n\n"
-                f"Site: {site.name}\n"
-                f"Error: {error_text}"
-            )
+        send_telegram(
+            f"🚨 *Website Error!*\n\n"
+            f"Site: {site.name}\n"
+            f"Error: {error_text}"
+        )
 
-        site.last_status = "error"
+
         db.commit()
 
 

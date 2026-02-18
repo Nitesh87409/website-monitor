@@ -7,22 +7,17 @@ SCREENSHOT_DIR = "screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
-def scan_website(url: str, keyword: str):
+def scan_website(
+    url: str,
+    keyword: str,
+    take_screenshot: bool = False   # ✅ DEFAULT FALSE
+):
     """
-    Scans website for:
-    - keyword
-    - keyword context (line)
+    Fast website scan:
+    - keyword detection
+    - keyword context
     - pdf links
-    - Telegram-safe screenshot
-
-    Returns dict:
-    {
-        "found": bool,
-        "context": str | None,
-        "pdf_links": list[str],
-        "screenshot": str,
-        "final_url": str
-    }
+    - OPTIONAL screenshot (ONLY when change detected)
     """
 
     result = {
@@ -45,30 +40,42 @@ def scan_website(url: str, keyword: str):
         )
 
         page = browser.new_page()
-
-        # ✅ Telegram-safe viewport
         page.set_viewport_size({"width": 1280, "height": 720})
-
-        # ⏱️ Govt sites ke liye safe timeout
         page.set_default_timeout(30000)
 
         try:
-            # ⚠️ IMPORTANT: domcontentloaded is fastest + safest
+            # ⚡ Fast + stable load
             page.goto(url, wait_until="domcontentloaded")
-            time.sleep(3)  # JS buffer
+            time.sleep(2)
 
-            # 🔁 Final URL after redirect
             result["final_url"] = page.url
 
-            # 🔑 KEYWORD + CONTEXT
             body_text = page.inner_text("body")
+            body_lower = body_text.lower()
+
+            # ⛔ IGNORE ERROR / DEFAULT PAGES
+            error_phrases = [
+                "default error",
+                "please review the following url",
+                "aspxerrorpath",
+                "page not found",
+                "404",
+                "error occurred"
+            ]
+
+            for phrase in error_phrases:
+                if phrase in body_lower:
+                    print("⛔ ERROR PAGE DETECTED — SKIPPED")
+                    return result
+
+            # 🔑 Keyword + context
             for line in body_text.splitlines():
                 if keyword.lower() in line.lower():
                     result["found"] = True
                     result["context"] = line.strip()[:300]
                     break
 
-            # 📄 PDF LINKS (clean + unique)
+            # 📄 PDF links (unique)
             seen = set()
             for link in page.query_selector_all("a"):
                 href = link.get_attribute("href")
@@ -76,23 +83,19 @@ def scan_website(url: str, keyword: str):
                     continue
 
                 full_url = urljoin(result["final_url"], href)
-
-                if (
-                    full_url.lower().endswith(".pdf")
-                    and full_url not in seen
-                ):
+                if full_url.lower().endswith(".pdf") and full_url not in seen:
                     seen.add(full_url)
                     result["pdf_links"].append(full_url)
 
-            # 📸 Telegram-safe screenshot (NOT full page)
-            domain = urlparse(result["final_url"]).netloc.replace(".", "_")
-            filename = f"{SCREENSHOT_DIR}/{domain}_{int(time.time())}.png"
-
-            page.screenshot(path=filename)
-            result["screenshot"] = filename
+            # 📸 Screenshot ONLY if keyword FOUND
+            if take_screenshot and result["found"]:
+                domain = urlparse(result["final_url"]).netloc.replace(".", "_")
+                filename = f"{SCREENSHOT_DIR}/{domain}_{int(time.time())}.png"
+                page.screenshot(path=filename)
+                result["screenshot"] = filename
 
         except Exception as e:
-            print("❌ WEBSITE SCAN ERROR:", e)
+            print("❌ WEBSITE SCAN ERROR:", repr(e))
 
         finally:
             browser.close()
