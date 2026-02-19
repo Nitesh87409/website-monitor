@@ -2,22 +2,27 @@ from playwright.sync_api import sync_playwright
 from urllib.parse import urljoin, urlparse
 import os
 import time
+import hashlib
 
 SCREENSHOT_DIR = "screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
+def compute_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def scan_website(
     url: str,
     keyword: str,
-    take_screenshot: bool = False   # ✅ DEFAULT FALSE
+    take_screenshot: bool = False   # ✅ default FALSE
 ):
     """
     Fast website scan:
-    - keyword detection
-    - keyword context
+    - keyword detection (optional)
+    - page hash (for full-page change detection)
     - pdf links
-    - OPTIONAL screenshot (ONLY when change detected)
+    - screenshot ONLY when explicitly asked
     """
 
     result = {
@@ -25,7 +30,8 @@ def scan_website(
         "context": None,
         "pdf_links": [],
         "screenshot": None,
-        "final_url": None
+        "final_url": None,
+        "page_hash": None,          # ✅ IMPORTANT
     }
 
     with sync_playwright() as p:
@@ -44,7 +50,7 @@ def scan_website(
         page.set_default_timeout(30000)
 
         try:
-            # ⚡ Fast + stable load
+            # ⚡ Fast load
             page.goto(url, wait_until="domcontentloaded")
             time.sleep(2)
 
@@ -53,10 +59,17 @@ def scan_website(
             body_text = page.inner_text("body")
             body_lower = body_text.lower()
 
-            # ⛔ IGNORE ERROR / DEFAULT PAGES
+            # =========================
+            # 🔐 PAGE HASH (ALWAYS)
+            # =========================
+            clean_text = " ".join(body_text.split())
+            result["page_hash"] = compute_hash(clean_text)
+
+            # =========================
+            # ⛔ IGNORE ERROR PAGES
+            # =========================
             error_phrases = [
                 "default error",
-                "please review the following url",
                 "aspxerrorpath",
                 "page not found",
                 "404",
@@ -65,17 +78,22 @@ def scan_website(
 
             for phrase in error_phrases:
                 if phrase in body_lower:
-                    print("⛔ ERROR PAGE DETECTED — SKIPPED")
-                    return result
+                    print("⛔ ERROR PAGE DETECTED — SKIPPED CONTENT")
+                    return result   # hash already set ✔
 
-            # 🔑 Keyword + context
-            for line in body_text.splitlines():
-                if keyword.lower() in line.lower():
-                    result["found"] = True
-                    result["context"] = line.strip()[:300]
-                    break
+            # =========================
+            # 🔑 KEYWORD DETECTION (ONLY if keyword provided)
+            # =========================
+            if keyword:
+                for line in body_text.splitlines():
+                    if keyword.lower() in line.lower():
+                        result["found"] = True
+                        result["context"] = line.strip()[:300]
+                        break
 
-            # 📄 PDF links (unique)
+            # =========================
+            # 📄 PDF LINKS
+            # =========================
             seen = set()
             for link in page.query_selector_all("a"):
                 href = link.get_attribute("href")
@@ -87,8 +105,10 @@ def scan_website(
                     seen.add(full_url)
                     result["pdf_links"].append(full_url)
 
-            # 📸 Screenshot ONLY if keyword FOUND
-            if take_screenshot and result["found"]:
+            # =========================
+            # 📸 SCREENSHOT (ONLY when requested)
+            # =========================
+            if take_screenshot:
                 domain = urlparse(result["final_url"]).netloc.replace(".", "_")
                 filename = f"{SCREENSHOT_DIR}/{domain}_{int(time.time())}.png"
                 page.screenshot(path=filename)

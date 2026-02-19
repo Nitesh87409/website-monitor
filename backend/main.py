@@ -77,10 +77,11 @@ def shutdown():
 
 
 # =========================
-# WEBSITE CHECK (KEYWORD + SCREENSHOT + PDF DOWNLOAD + ATTACH)
+# WEBSITE CHECK (KEYWORD / FULL PAGE CHANGE)
 # =========================
 def check_website(db, site: Website):
     print(f"🔍 Scanning: {site.name} | {site.url} | keyword={site.keyword}")
+
     if not site.enabled or not MONITORING_ENABLED:
         return
 
@@ -88,19 +89,64 @@ def check_website(db, site: Website):
         site.last_checked = int(time.time())
 
         # 🔍 FAST SCAN (NO screenshot)
-        scan = scan_website(
+        fast_scan = scan_website(
             site.url,
-            site.keyword,
+            site.keyword or "",
             take_screenshot=False
         )
 
         site.last_status = "up"
 
-        # 🚨 KEYWORD FOUND FOR FIRST TIME
-        if scan.get("found") and not site.alert_sent:
+        # ======================================================
+        # 🔁 FULL PAGE CHANGE MODE (WHEN keyword IS EMPTY)
+        # ======================================================
+        if not site.keyword:
 
-            # 🔍 SECOND SCAN (WITH screenshot)
-            scan = scan_website(
+            current_hash = fast_scan.get("page_hash")
+            if not current_hash:
+                return
+
+            # 🟢 FIRST RUN → save hash only (NO alert)
+            if site.first_run or not site.last_hash:
+                site.last_hash = current_hash
+                site.first_run = False
+                db.commit()
+                return
+
+            # 🔁 PAGE CONTENT CHANGED
+            if site.last_hash != current_hash:
+
+                # 🔍 SECOND SCAN WITH SCREENSHOT
+                alert_scan = scan_website(
+                    site.url,
+                    "",
+                    take_screenshot=True
+                )
+
+                message = (
+                    f"🆕 *Website Updated!*\n\n"
+                    f"🏢 *Site:* {site.name}\n"
+                    f"🌐 *Page:* {alert_scan.get('final_url') or site.url}\n"
+                    f"🕒 *Time:* {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+
+                if alert_scan.get("screenshot"):
+                    send_telegram_photo(alert_scan["screenshot"], message)
+                else:
+                    send_telegram(message)
+
+                site.last_hash = current_hash
+                db.commit()
+
+            return  # ⛔ VERY IMPORTANT (skip keyword logic)
+
+        # ======================================================
+        # 🔑 KEYWORD MODE
+        # ======================================================
+        if fast_scan.get("found") and not site.alert_sent:
+
+            # 🔍 SECOND SCAN WITH SCREENSHOT
+            alert_scan = scan_website(
                 site.url,
                 site.keyword,
                 take_screenshot=True
@@ -110,40 +156,37 @@ def check_website(db, site: Website):
                 f"🚨 *NEW SARKARI UPDATE FOUND!*\n\n"
                 f"🏢 *Site:* {site.name}\n"
                 f"🔑 *Keyword:* {site.keyword}\n"
-                f"🌐 *Page:* {scan.get('final_url') or site.url}\n"
+                f"🌐 *Page:* {alert_scan.get('final_url') or site.url}\n"
             )
 
-            # 🧠 Context
-            if scan.get("context"):
-                message += f"\n🧾 *Context:*\n{scan['context']}\n"
+            if alert_scan.get("context"):
+                message += f"\n🧾 *Context:*\n{alert_scan['context']}\n"
 
-            # 📄 PDF links (text)
-            if scan.get("pdf_links"):
+            if alert_scan.get("pdf_links"):
                 message += "\n📄 *PDF Links:*\n"
-                message += "\n".join(scan["pdf_links"][:3])
+                message += "\n".join(alert_scan["pdf_links"][:3])
 
             # 📸 Screenshot (ONLY ONCE)
-            if scan.get("screenshot"):
-                send_telegram_photo(scan["screenshot"], message)
+            if alert_scan.get("screenshot"):
+                send_telegram_photo(alert_scan["screenshot"], message)
             else:
                 send_telegram(message)
 
-            # =========================
+
             # 📥 PDF DOWNLOAD + ATTACH (ONLY ONCE)
-            # =========================
-            if scan.get("pdf_links"):
+            if alert_scan.get("pdf_links"):
                 os.makedirs("downloads", exist_ok=True)
 
-                for pdf_url in scan["pdf_links"][:2]:
+                for pdf_url in alert_scan["pdf_links"][:2]:
                     try:
                         filename = pdf_url.split("/")[-1]
                         local_path = os.path.join("downloads", filename)
 
-                        # ⛔ Already downloaded → skip
+
                         if os.path.exists(local_path):
                             continue
 
-                        r = requests.get(pdf_url, timeout=30)
+                        r = requests.get(pdf_url, timeout=60)
                         if r.status_code == 200:
                             with open(local_path, "wb") as f:
                                 f.write(r.content)
@@ -157,19 +200,19 @@ def check_website(db, site: Website):
                     except Exception as pdf_err:
                         print("❌ PDF download/send error:", pdf_err)
 
-            # 📝 LOG
+
             save_log(
                 db,
                 site.id,
                 "keyword",
-                f"Keyword '{site.keyword}' found with screenshot & PDF"
+                f"Keyword '{site.keyword}' found"
             )
 
             site.keyword_found = True
             site.alert_sent = True
 
-        # 🔄 Keyword removed → reset for next detection
-        if not scan.get("found"):
+        # 🔄 KEYWORD REMOVED → reset
+        if site.keyword and not fast_scan.get("found"):
             site.keyword_found = False
             site.alert_sent = False
 
@@ -183,19 +226,20 @@ def check_website(db, site: Website):
         error_text = repr(e) if not str(e).strip() else str(e)
         print("❌ WEBSITE SCAN ERROR:", error_text)
 
-        # ⚠️ Ignore first run glitches
+
         if site.first_run:
             site.first_run = False
             db.commit()
             return
 
-        # 🚫 Prevent repeat error spam
+
         save_log(db, site.id, "error", error_text)
 
         send_telegram(
             f"🚨 *Website Error!*\n\n"
             f"Site: {site.name}\n"
             f"Error: {error_text}"
+
         )
 
 
